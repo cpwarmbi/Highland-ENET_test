@@ -1,0 +1,253 @@
+#!/usr/bin/expect
+
+#-----------------------------------------------------------#
+#                   Highland Test Program                   #
+#-----------------------------------------------------------#
+#                                                           #
+# >desc:                                                    #
+#   Tests the Highland Delay Generator through ethernet     #
+#   connection. Prompts user with a menu from which they    #
+#   can choose to load the config file (highland.cfg),      #
+#   toggle the GATE, or have manual serial comms with the   #
+#   device.                                                 #
+#                                                           #
+# >author: Corbin Warmbier [cpwarmbi@hawaii.edu] 3/31/2020  #
+#                                                           #
+#-----------------------------------------------------------#
+
+# set constants #
+set timeout 20
+set ip "192.168.1.10"
+# syntax "/path/to/highland.cfg" #
+set config_file "~/Software/src/resources/Highland\ Testing/highland.cfg"
+set port 2000
+
+# intro message #
+send_user {
+-------------------------------------------------------------
++  Highland Delay Generator Test Program (ethernet)         +
++                                                           +
++  @author: Corbin Warmbier 3/25/20 [cpwarmbi@hawaii.edu]   +
+-------------------------------------------------------------}
+sleep 0.5
+
+# procedure of possible telnet outputs #
+proc telnet_run {{string_toWrite 0} {type_list 0}}  {
+	log_user 0
+	global ip
+	global port
+	spawn telnet $ip $port
+	set flag -1
+	expect {
+		"'^]'." { 
+			if {$string_toWrite != 0} {
+				if  {$type_list != 0} {
+					for {set i 0} {$i<[llength $string_toWrite]} {incr i} {
+						#log_user 1
+						set temp [string map {_ " "} [lindex $string_toWrite $i]]
+						sleep 0.02
+						send "\n$temp\r"
+						sleep 0.02
+						send "\r"
+					}
+				} else {
+					send "$string_toWrite\r"
+					sleep 0.02
+					send "\r"
+				}
+			}
+			set flag 0 
+		}
+		"No route to host" { 
+			set flag 1 
+		}
+		"Connection refused" { 
+			set flag 2 
+		}
+	}
+	close
+	log_user 1
+	return $flag
+}
+# func to test connection privately (w/o showing the user) #
+proc error_handler {flag}  {
+	# switch between possible errors #
+	global ip
+	global port	
+	switch $flag {
+	    0 { 
+		send_user "\n\nConnection was successful.\n" }
+	    1 {
+		send_user "\n\nConnection was unsuccessful, error $flag"
+		send_user "\nIs the device on? Is the ethernet connected?"
+		send_user "\nHas the IP address of the device changed from $ip"
+		send_user "?\nHas the port changed from $port" 
+		send_user "?\nPort should always be 2000\n" } 
+	    2 {
+		send_user "\n\nConnection was unsuccessful error $flag "
+		send_user "\nSomebody is already connected to the device or" 
+		send_user "\nThe device is still turning on.\n"}
+	    default {
+		send_user "\n\nConnection was unsuccessful"
+		send_user "\nUnknown error\n" }	
+	}	
+}
+# Procedure to handle connection re-try loop #
+proc connection_handler {flag} {
+	while {$flag != 0} {
+		send_user "\nWould you like to re-test the connection? y/n: "
+		flush stdout
+		gets stdin user_input
+		switch $user_input {
+	    	    y { 
+			set flag [telnet_run]
+			error_handler $flag }
+	    	    Y {
+			set flag [telnet_run] 
+			error_handler $flag }
+	    	    N {
+			send_user "\nExiting program...\n"
+		        exit }
+	    	    n {
+			send_user "\nExiting program...\n"
+			exit }
+	    	    default {
+			send_user "\nInvalid input. Try again." }\
+		}
+	} 
+}
+# Procedure to open, read, check, and load the config file #
+proc configuration_loader {} {
+	# open, read, and parse config file #
+	global config_file
+	set find [expr {![catch {file lstat $config_file finfo}]}]
+	if {$find == 0} {
+		send_user "\nFile highland.cfg was not found in dir:"
+		send_user "\n$config_file"
+		send_user "\n\nPlease move highland.cfg into the proper directory"
+		send_user "\nor change the path_to in this program (at the top)"
+		send_user "\n\nExiting program...\n"
+		exit
+	}
+	set fp [open $config_file r]
+	set file_data [read $fp]
+	set file_data_final [regsub -all -line {(?:^[ \t]*|#.*)(?:\n|\Z)} $file_data ""]
+	set flag 0
+	send_user "\nChecking for errors in highland.cfg..."	
+	sleep 0.5
+	for {set i 0} {$i<[llength $file_data_final]} {incr i} {
+		if {[string first ";" [lindex $file_data_final $i]] == -1} {
+			set line [lsearch $file_data [lindex $file_data_final $i]]
+			set flag 1
+			incr line 1
+			send_user "\nError on line $line"
+			send_user ". Missing ';' or '_' between chars"
+		}
+	}
+	close $fp
+	if {$flag != 0} {
+		sleep 0.01
+		send_user "\n\n\nPlease fix the errors with highland.cfg and save the file"
+		send_user "\nRestart this program once all errors have been fixed\n"
+		send_user {
+Note: If there are multiple errors, only the first line number may be correct,
+as this program can not accurately predict line numbers. The line numbers should
+provide an approximation. You may always fix the first line number and recompile
+to get more accurate line numbers. }
+		send_user "\n\nExiting...\n"
+		exit
+	} else {
+		send_user "\nNo ';' or '_' syntax errors found!"
+	}
+	send_user "\n\nAttempting to recconect to device..."
+	set flag [telnet_run $file_data_final 1]
+	error_handler $flag
+	connection_handler $flag
+	
+}
+# Procedure to enable user interaction w/ device over telnet #
+proc telnet_interaction {} {
+	global ip
+	global port
+	log_user 0
+	spawn telnet $ip $port
+	sleep 0.5
+	log_user 1
+	send_user {
+Session has started.
+Type 'exit' to exit the manual interact session.
+The text below is telnet's auto-generated message.
+Do not use '^]' to escape. Instead type 'exit'.
+While typing 'exit' your text will be and MUST be
+hidden  }
+	send_user "\n\n"
+	while {1} {
+		interact "exit" { 
+			close
+			break 
+		}
+	}
+}
+# procedure that prints out the menu of options for user. reads in user input and executes the choice #
+proc menu {} {
+	send_user "\n\n"
+	send_user {
+------------------------------------------------------------
++                Highland Test Program Menu                +
+------------------------------------------------------------
++ Options:                                                 +
++ > 0: Load configuration file (highland.cfg)              +
++ > 1: Set GATE to HIGH (enable triggers; LOW by default)  +
++ > 2: Set GATE to LOW (disable triggers)                  +
++ > 3: Manual interaction w/ device over telnet            +
+------------------------------------------------------------
++ > 99: exit                                               +
+------------------------------------------------------------
+Your input: }
+	flush stdout
+	gets stdin user_input
+	switch $user_input {
+	    0 {
+		send_user "\nLoading configuration file...\n"
+		configuration_loader 
+		send_user "\nConfiguration file successfully loaded\n"
+		}
+	    1 {
+		set GA "GA OF"
+		send_user "\nAttempting to set GATE to HIGH..."
+		send_user "\nAttempting to reconnect to device..."
+		set flag [telnet_run $GA]
+		error_handler $flag
+		connection_handler $flag 
+		send_user "\nCommand successfully executed." }
+	    2 {
+		set GA "GA RE"
+		send_user "\nSetting GATE to LOW..."
+		send_user "\nAttempting to reconnect to device..."
+		set flag [telnet_run $GA]
+		error_handler $flag
+		connection_handler $flag
+		send_user "\nCommand successfully executed." }
+	    3 {
+		send_user "\nEnabling manual interaction...\n"
+		telnet_interaction
+		send_user "\nClosing manual interaction session...\n"
+	    }
+	    99 {
+		send_user "\nExiting program...\n"
+		close
+		exit }
+	    default {
+		send_user "Invalid input" }
+	}
+	
+}
+# implementation #
+send_user "\nTesting initial ethernet connection to device..."
+sleep 0.5
+set flag [telnet_run]
+error_handler $flag
+connection_handler $flag
+sleep 0.5
+# perpetual loop in menu #
+while {1} { menu }
